@@ -100,6 +100,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
@@ -144,7 +145,6 @@ public class EmailOTPAuthenticator extends AbstractApplicationAuthenticator
             return AuthenticatorFlowStatus.INCOMPLETE;
         } else if (StringUtils.isEmpty(request.getParameter(EmailOTPAuthenticatorConstants.CODE)) &&
                 StringUtils.isEmpty(request.getParameter(EmailOTPAuthenticatorConstants.RESEND))) {
-            User user;
             AuthenticatedUser authenticatedUser = getAuthenticatedUser(context);
             if (authenticatedUser == null) {
                 if (StringUtils.isEmpty(request.getParameter(EmailOTPAuthenticatorConstants.USER_NAME))) {
@@ -158,6 +158,7 @@ public class EmailOTPAuthenticator extends AbstractApplicationAuthenticator
                 }
             } else if (isPreviousIdPAuthenticationFlowHandler(context)) {
                 authenticatedUser = resolveUserFromUserStore(authenticatedUser);
+                setResolvedUserInContext(context, authenticatedUser);
             }
             if (authenticatedUser != null) {
                 initiateAuthenticationRequest(request, response, context);
@@ -241,7 +242,7 @@ public class EmailOTPAuthenticator extends AbstractApplicationAuthenticator
                 // Iterate through the steps to identify from which step the user email address need to extracted
                 for (StepConfig stepConfig : stepConfigMap.values()) {
                     authenticatedUser = stepConfig.getAuthenticatedUser();
-                    if (isPreviousIdPAuthenticationFlowHandler(context)) {
+                    if (authenticatedUser != null && isPreviousIdPAuthenticationFlowHandler(context)) {
                         authenticatedUser = resolveUserFromUserStore(authenticatedUser);
                     }
                     if (authenticatedUser != null && stepConfig.isSubjectAttributeStep()) {
@@ -2929,10 +2930,8 @@ public class EmailOTPAuthenticator extends AbstractApplicationAuthenticator
 
             Map<Integer, StepConfig> stepConfigMap = context.getSequenceConfig().getStepMap();
             StepConfig currentStepConfig = stepConfigMap.get(context.getCurrentStep());
-            if (currentStepConfig.isSubjectAttributeStep()) {
-                currentStepConfig.setAuthenticatedUser(authenticatedUser);
-                currentStepConfig.setAuthenticatedIdP(LOCAL_AUTHENTICATOR);
-            }
+            currentStepConfig.setAuthenticatedUser(authenticatedUser);
+            currentStepConfig.setAuthenticatedIdP(LOCAL_AUTHENTICATOR);
         }
     }
 
@@ -3014,5 +3013,30 @@ public class EmailOTPAuthenticator extends AbstractApplicationAuthenticator
     private boolean isEmailOTPAsFirstFactor(AuthenticationContext context) {
 
         return (context.getCurrentStep() == 1 || isPreviousIdPAuthenticationFlowHandler(context));
+    }
+
+    /**
+     * If authentication sequence contains a subject step attribute, this method returns the step config of that step.
+     * Else, it returns the step config of the most recent step that has an authenticated user.
+     *
+     * @param context   AuthenticationContext.
+     * @return Step Config object.
+     */
+    private StepConfig getStepConfigWithAuthenticatedUser(AuthenticationContext context) {
+
+        Map<Integer, StepConfig> stepConfigMap = context.getSequenceConfig().getStepMap();
+        int currentStep = context.getCurrentStep();
+
+        Optional<Map.Entry<Integer, StepConfig>> subjectAttributeStep = stepConfigMap.entrySet().stream()
+                .filter(entry -> entry.getValue().isSubjectAttributeStep())
+                .findFirst();
+        if (subjectAttributeStep.isPresent() && subjectAttributeStep.get().getKey() <= currentStep) {
+            return subjectAttributeStep.get().getValue();
+        }
+        Optional<Map.Entry<Integer, StepConfig>> mostRecentAuthStepEntry = stepConfigMap.entrySet().stream()
+                .filter(entry -> entry.getValue().getAuthenticatedUser() != null && entry.getKey() <= currentStep)
+                .max(Map.Entry.comparingByKey());
+
+        return mostRecentAuthStepEntry.map(Map.Entry::getValue).orElse(null);
     }
 }
